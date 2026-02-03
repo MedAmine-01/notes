@@ -1,0 +1,511 @@
+Variable setting::
+
+	VARIABLE = "value"   this assignement occurs immediatly as the statement is parsed  (hard assignment)
+
+	to check variables : 
+	1) in configuration file : bitbake -e
+	2) in recipe changes : bitbake recipe -e | grep ^VARIABLE= (where recipe is the name of the recipe)
+		eg bitbake core-image-minimal | grep ^LICENSE
+
+
+Line Joining::
+
+	"\" character is to split variable assignment over multiple lines (same syntax in macro fn in C)
+		bitbake -e | grep ^BBLAYERS
+		
+Soft Assignement::
+	
+	?= is used for soft assignment for a variable allows to define a variable if it is undefinied when the statement is parsed . If the varibale has a value, then the soft assignment will be lost 
+		Eg:  MACHINE ?="qemuarm"  --> qemuarm is the machine
+		Eg: MACHINE ?="qemuarm" MACHINE = "qemux86-64"  --> qemux86-64 is the machine
+		
+	if there's multiple soft assignement ?= then the first one of those ends up getting used
+	
+Weaker Default Value::
+	
+	??= assignemt is made at the end of parsing process rather than immediately
+	when you have multiple ??= then the last one is used
+	
+
+Variable Expansion::
+
+	variable can reference contents of other variable using syntax similar to variable expansion in bash
+	
+	A = "hello"
+	B = "${A} world"
+	
+	the "=" operator does not immediatly expand the variable reference in the right hand side. Instead expansion is deffered until the variable assigned is actually used.
+	
+	A = "${B} hello"
+	B = "${C} world"
+	C = "linux"	  --> grep ^A => A="linux hello world"
+	
+	what if C is not defined? -->  B="\${C} world"
+	
+Immediate Variable Expansion::
+
+	:= operator results in a variable's content being expanded immediatly, rather than when actually used
+	A = "11"
+	B = "B: ${A}" --> B: 22
+	C := "C:${A}" --> C: 11
+	A = "22"
+	D = "${B}"    --> D: 22
+	
+Appending operators
+
+	+= and .= the difference is space character is added automatically in += 
+	
+	A = "hello"
+	A += "world"   --> A = "hello world"
+	
+	A = "hello"
+	A .= "world"   --> A = "helloworld"
+	
+Prepending Operators
+
+	=+ and =.  same as Appending
+	
+	A = "hello"
+	A =+ "world"   --> A = "world hello"
+	
+
+Appending and prepending (override syntax)
+
+	A_append = " world"   C_prepend = "house"   (no space is added automatically)
+	
+Variable Removal
+
+	FOO = "123 456 789 123456 123 456 123 456"
+	FOO_remove = "123"  --> 123456 will not be removed here it has to be between 2 spaces
+	
+Overriding operators
+
+	every file is parsed differently so the hard assignement may happen after the Appending operator
+	overriding operators makes sure that the appending happens after the assignements
+	
+------------------------------------------------LAYERS------------------------------------------------------------------------
+
+
+What is a layer : a logical collection of related recipes (eg. oe-core, BSP layer, application layer ...)
+layer name must start with meta- (convention but not restriction)
+
+Whye create a meta layer ?
+	despite most configs can happen in local.conf it's not possible to 
+		store recipes for you own software projects
+		create your own images
+		consilidate patches/modification to other recipes
+		add a new custom kernel / add new machine ...
+	
+	YOU should not edit poky as it complicated future updates
+	
+Depending on the type of layer
+	adding support for machine --> configs in conf/machine
+	adding distro policy --> configs in conf/distro
+	add new recipes --> recipes in recipe-* subdir of the layer dir
+	
+Create a layer
+	1) Manually ----
+		step1: create dir for the layer eg. meta-mylayer
+		step2: create a conf/layer.conf (you can cp ../../poky/meta-skeleton/conf/layer.conf and update it)
+		step3: update bblayers.conf file with new layer 
+		
+	2) Script  -----
+	
+		bitbake-layers create-layer ../source/meta-mylayer (check --help for more)
+	
+	
+	
+------------------------------------------------------IMAGE------------------------------------------------------
+
+What is an Image	
+	
+	Image is a top level recipe. (It inherit a image.bbclass) 
+
+	Building it --> creates an entire Linux distribution from source : compiler, tools, libraries, bootloader, kernel, root fs
+
+
+What is package group
+	
+	set of packages that can be included on any image 
+	
+	IMAGE_INSTALL variable install all the packages defined by the package group into the root fs of target image
+	
+	find . -name 'packagegroups'
+	
+	
+1)Creating an image from scratch
+	
+	simplest way is to inherit the core-image bbclass as it provides a set of image features that can be used easily
+	
+	in meta-mylayer/recipes-examples
+	
+		mkdir images
+		
+		gedit my-image.bb
+		
+		in my-image.bb: inherit core-image
+
+		bitbake -e my-image | grep ^IMAGE_INSTALL=
+		
+		you can add in my-image.bb : IMAGE_INSTALL = "packagegroup-core-boot" to override the one of poky/meta/classes-recipe/core-image.bbclass
+		
+
+Add package to existing image
+
+	IMAGE_INSTALL += "usbutils" in my-image.bb
+	
+	
+2)Reusing an existing image with minor changes
+
+	in my-image.bb :   require recipes-core/images/core-image-minimal.bb
+			   IMAGE_INSTALL += "usbutils"
+			   
+			   
+			   	
+------------------------------------------------------CUSTOMIZE IMAGE------------------------------------------------------
+	
+Customizion imaages
+
+	using Custom IMAGE_FEATURES and EXTRA_IMAGE_FEATURES
+	
+	those variables are made to enable special features for image, such as empty password for root, debug image, special package, x11, splash, ssh-server
+	
+Difference between 2 variables (they are the same but best practice)
+	IMAGE_FEATURES: from a recipe
+	
+	EXTRA_IMAGE_FEATURES: from local.com
+	
+How it works 
+
+	best reference to understand is to look at meta/classes-recipe/core-image.bbclass
+	
+	this class lists out the available IMAGE_FEATURES of which map to package groups while some like debug-tweaks and read-only-rootfs resolve as general config settings
+	
+	based on this information, the build system automatically adds the appropriate packages or configurations to IMAGE_INSTALL
+	
+Example
+	IMAGE_FEATURES = "ssh-server-dropbear"
+	
+Read-Only Root fs 
+	why : reduce wear on flash memory and eliminate system file corruption
+	how : IMAGE_FEATURES = "read-only-rootfs" in recipe or extra in local.conf
+	
+Some other features
+
+	tools-degub: installs debugging tools like strace and gdb
+	tools-sdk: installs a full sdk that runs on the device 
+	
+Image name 
+	IMAGE_NAME = ${IMAGE_BASENAME}-${MACHINE}-${DATATIME}    (hedhi by default)
+	
+Image manifest 
+	
+	file for image contains pakcage information on a line per package basis as follows
+		packagename packagearchitecture version
+		
+	The image class defines the manifest file as follows:
+	
+		IMAGE_MANIFEST = "${DEPLOY_DIR_IMAGE}/${IMAGE_NAME}.rootfs.manifest"
+		
+
+	
+------------------------------------------------------RECIPES------------------------------------------------------
+	
+what is recipe 
+	
+	fundamental component in the yoctro project  . its a text file with filename *.bb
+	
+what infos present in recipe
+	
+	infos such as 
+		-location from which to download the sourece
+		-any patches to be applied to the source if needed
+		-special configuration options to apply
+		-how to compile the source files 
+		-how to package the compiled output
+		
+File format : <base_name>_<version>.bb
+
+Bitbake
+
+	generally the only tasks that the user need to specify in a recipe are
+		do_configure
+		do_compile
+		do_install
+			
+	you can use -c argument to execute the specific task
+	
+		bitbake -c compile dropbear
+	
+	to list all tasks of a recipe
+	
+		bitbake <recipe-name> -c listtasks
+		
+
+Stage 1) Fetch (do_fetch)
+	
+	how to fetch source file Git, http server, ftp server, local file ...
+	
+	it's controlled mainly by SRC_URI variable that points to the location of the source
+	
+	syntax scheme://url;param1;param2    (eg. file://,  https://, svn://, git:// ...)
+	
+	by default sources are fetched in $BUILDDIR/downloads
+	
+	
+Stage 2) Unpacking (do_unpack)
+
+	all local files are copied into recipe working dir in $BUILDDIR/tmp/work
+	
+	if fetching from scm like git or svn, S variable need to be defined (eg. for git scheme, S=${WORKDIR}/git)
+	
+Stage 3) Patching Code (do_patch)
+
+	files mentioned in SRC_URI whose name end with .patch or .diff are treated as patches
+	
+	Lisence
+
+		LICENSE specifies the license for the software
+		LIC_FILES_CHKSUM: make sure that the license file has not been changed
+		
+Stage 4) Configuration (do_configure)
+
+	running config scripts with options 
+	eg. CMake : if files have a CMakeLists.txt file then the software is built using CMake
+	
+Stage 5) Compilation
+
+Stage 6) Installation
+
+	Copy the build files along with their hierarchy to locations that would mirror their locations on the target device
+	
+Stage 7) Packaging (do_package)
+
+	split files produced by the recipes into logical componants 
+	
+
+------------------------------------------------------C Progarm Recipe------------------------------------------------------
+	
+Step 1: create a hello world c program
+
+Step 2: create a folder in the layer recipes-example 'myhello'
+	mkdir -p recipes-examples/myhello
+	
+Step 3: create a files folder inside myhello and copy myprogram.c in it
+
+Step 4: Create a file called myhello_0.1.bb with the following content
+
+	DESCRIPTION = "Simple hello world application"
+	LICENSE = "MIT"
+	LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
+	SRC_URI = "file://myprogram.c"
+
+	(in poky/meta/files/common-license) you can (cat MIT) and (md5sum MIT --> you get the md5 checksum)
+	
+	S = ${WORKDIR} 
+	
+	do_compile(){
+		${CC} myprogram.c <${LDFLAGS}> -o myprogram
+	}
+	
+	do_install(){
+		install -d ${D}${bindir}  (create bindir in D the image folder)
+		install -m 0755 userprog ${D}${bindir} (install the prog to the folder with permisionn 0755)
+	}
+	
+	
+-----------------------------------WORDIR-----------------------------------
+the location of the work directory in which oe build system builds a recipe.
+
+by default it's defined like this:
+	${TMPDIR}/works/${MULTIMACH_TARGET_SYS}/${PN}/${EXTENDPE}${PV}-${PR}
+	
+	where those variables are in order: top level build output dir, -the target system identifier, -recipe name, -mostly blank, recipe version, recipe revision
+	
+
+-----------------------------------OPENEMBEDDED VARS -----------------------------------	
+	
+S: contains the unpacked source files of the given recipe
+
+D: the destination directory (root directory of where the files are installed, before creating the image)
+
+PN, PV, PR:  recipe name, version and revision used to build the package
+
+WORKDIR 
+
+-----------------------------building the recipe--------------------------
+
+$bitbake myhello
+
+when building image you can bitbake -c cleanall myhello 
+
+then try using bitbake -c fetch myhello , unpack, configure,compile, install, package .... and see the updates on the workdir. (results may differ from directly baking the recipe)
+	
+	
+	bitbake -c configure myhello --> create 2 directories sysroot and sysroot-native : includes needed headers and libraries for generating binaries that run on the target system   native --> host machine , other --> normal machine
+	
+	after install you can find program in image/usr/bin with 0755 permission
+	
+----------------------------base.bbclass--------------------
+automatically inherited by all recipes contain default definition for standard tasks fetch, unpack ...
+
+------------------------------LOG----------------------------
+logging function: bb.fatal / error/ warn/ note/ plain/ debug (python, for shell remove the .)
+
+------------------------------MULTIPLE FILES CODE -------------------------------------
+the usual thing to do is: 	gcc myprogram.c function.c -o myprogram
+
+int .bb file add "\ file://function.c"  and change the compile line to  ${CC} myprogram.c function.c ${LDFLAGS} -o myprogram
+
+-------------------------------DEFINES----------------------------------------
+
+you can define variable like in gcc  using D flag (eg define USE_SYSCALL)
+	
+${CC} -DSUSEYS_CALL myprogram.c function.c ${LDFLAGS} -o myprogram
+
+----------------------------------USING MAKEFILE---------------------------------------
+we have this makefile 
+
+		#Compiler flags 
+		# -g adds debugging information to the executable file
+		# -Wall turns on most, but not all compiler warnings
+
+		CFLAGS = -g -Wall -DUSE_SYSCALL
+
+		#the name to use for both the target source file and the output file:
+
+		TARGET = myprogram
+
+		all: $(TARGET)
+
+		$(TARGET): $(TARGET).c
+			$(CC) $(CFLAGS) $(LDFLAGS) -o $(TARGET) $(TARGET).c
+			
+		clean:
+			rm -f $(TARGET)
+			
+now in do_compile simply put: make (optional because in run.do_compile by defult calls do_compile  which calls oe_runmake (if theres Makefile) which run or_runmake_call which run make by default)
+
+ and add \ file://Makefile in SRC_URI		
+
+--------------------------------------oe_runmake--------------------------------------
+	runs make and passes EXTRA_OEMAKE settings to make 
+	display the make command
+	checks the error generated via the call
+	
+	to add additional make options you can pass them in the EXTRA_OEMAKE
+	
+----------------------------------INSTALL in Makefile----------------------------------
+
+we can use install from .bb and put it in Makefile
+	add this to Makefile:
+	install:
+		install -d $(DESTDIR)
+		install -m 0755 $(TARGET) $(DESTDIR)
+		
+	uninstall:
+		rm $(DESTDIR)$(TARGET)
+		
+	for example (non yocto "running make directlty) : righ now you cannont execute userprog direcltly
+
+	now you can execute : sudo make install DESTDIR=/usr/bin
+	
+	In yocto you can replace do_install code with: oe_runmake install DESTDIR=${D}/usr/bin
+	
+------------------------------clean target ---------------------------------
+if you remove clean: target from the Makefile error will happen in configure stage (check run.do_configure)
+or you can set CLEANBROKEN = "1" , OE buuild system 	will not try to run make clean in do_configre task
+
+
+
+
+
+---------------------------------GIT REPO PULL -------------------------
+
+step 1:
+	set SRC_URI:
+		SRC_URI = "git://<URL>;protocol=https"  (or protocol = git)
+		
+step 2: 
+	set the S environmental variable
+	
+	S= ${WORKDIR}/git
+	
+step 3 : 
+	Set SRCREV environmental variable (mandatory) determine the specific revision from which to build
+		2 option: 
+			1)SRCREV = "${AUTOREV}"         the latest source revision
+			2)a specific revision (sha1 hash when fetching from git)
+				SRCREV = "d69..............................385"
+			
+	
+	
+	cd recipes-example 
+	mkdir mygit
+	gedit mygit_0.1.bb
+	
+		DESCRIPTION = "A simple hello world application from git repository"
+		LICENSE = "MIT"
+		LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
+		SRC_URI = "git://github.com/linuxtrainer-lwl/git_recipe.git;protocol=https"
+		S = "${WORKDIR}/git
+		SRCREV = "${AUTOREV}"
+		do_compile(){
+			${CC} userprog.c -o userprog ${LDFLAGS}
+		}
+
+		do_install(){
+			install -d ${D}${bindir}
+			install -m 0755 userprog ${D}${bindir} 
+		}
+		
+		add it in local.conf and try it
+		
+		(when bitbake again and the repo latest commit changed the changes are feteched again (AUTOREV))
+		
+		
+----------------------------------------SPECIFY A BRANCH--------------------------------
+
+SRC_URI = "git://server.name/repo;branch=branchname"  (by default the master is chosen)
+	SRC_URI = "git://github.com/linuxtrainer-lwl/git_recipe.git;protocol=https;branch=lwl"
+	
+	
+	
+---------------------------Local git repo---------------------------------------
+
+SRC_URI = "git://home/user/git/mytest/;protocol=file"
+
+----------------------------private repos------------------------------------
+
+SRC_URI = "git://git@github.com/groupname/reponame.git;protocol=ssh"   add sshkey 
+
+-----------------------------git tag----------------------------------
+
+SRC_URI = "git://home/user/git/mytest/;protocol=file;tag=v1.0.0"  aand remove SRCREV
+
+---------------------------patching the code---------------------------------
+
+
+---------------------------IEC61850 ON YOCTO-----------------------------------
+
+
+	DESCRIPTION = "IEC 61850 library"
+
+	LICENSE = "MIT"
+	LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
+
+	SRC_URI = "git://github.com/mz-automation/libiec61850.git;protocol=https;branch=v1.6"
+	SRCREV = "${AUTOREV}"
+
+	S = "${WORKDIR}/git"
+
+	DEPENDS = "cmake"
+
+	inherit cmake
+
+	do_install() {
+	install -d ${D}${bindir}
+	install -m 0755 ${B}/examples/sv_publisher/sv_publisher_example ${D}${bindir}
+	}
+
+
