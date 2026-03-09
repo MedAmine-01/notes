@@ -1,78 +1,116 @@
+static uint32_t UART_calcIdleTicks(UART_Params *prms)
+{
+    uint32_t bitsPerChar = 1U; /* start bit */
+
+    /* Data bits */
+    if (prms->dataLength == UART_LEN_8)
+        bitsPerChar += 8U;
+    else if (prms->dataLength == UART_LEN_7)
+        bitsPerChar += 7U;
+    else if (prms->dataLength == UART_LEN_6)
+        bitsPerChar += 6U;
+    else if (prms->dataLength == UART_LEN_5)
+        bitsPerChar += 5U;
+    else
+        bitsPerChar += 8U; /* safe default */
+
+    /* Parity bit */
+    if (prms->parityType != UART_PARITY_NONE)
+        bitsPerChar += 1U;
+
+    /* Stop bits */
+    if (prms->stopBits == UART_STOPBITS_2)
+        bitsPerChar += 2U;
+    else
+        bitsPerChar += 1U;
+
+    /* Character time in microseconds */
+    uint32_t charTimeUs = (bitsPerChar * 1000000U) / prms->baudRate;
+
+    uint32_t idleTimeUs = charTimeUs;
+
+    return ClockP_usecToTicks(idleTimeUs);
+}
+
+
+//-------------------------------------------------------------------------------------------------------------------------------------
+
 static int32_t UART_readIdlePolling(UART_Config      *config,
                                     UART_Object      *object,
                                     UART_Attrs const *attrs,
                                     UART_Transaction *trans,
-                                    uint32_t          idleTicks,
-                                    uint32_t         *numBytesRead)  
+                                    uint32_t         *numBytesRead)
 {
     uint32_t startTicks, elapsedTicks, lastRxTicks;
     int32_t  retVal = SystemP_SUCCESS;
     uint32_t stopCondition = 0;
     uint32_t bytesReadThisCall = 0;
+    uint32_t idleTicks;
+
+    /* Calculate idle time dynamically */
+    idleTicks = UART_calcIdleTicks(&object->prms);
 
     /* Initialize counters */
     object->readSizeRemaining = trans->count;
     object->readCount = 0U;
 
-    /* Record initial time */
     startTicks  = ClockP_getTicks();
     lastRxTicks = startTicks;
 
-    /* Main polling loop */
-    while ((0 == stopCondition) && (object->readSizeRemaining != 0U))
+    while ((0U == stopCondition) && (object->readSizeRemaining != 0U))
     {
         uint32_t before = object->readCount;
 
         /* Read bytes from FIFO */
         UART_readDataPolling(config, object, attrs);
 
-        /* Update lastRxTicks and accumulate bytes read */
         if (object->readCount > before)
         {
             bytesReadThisCall += object->readCount - before;
             lastRxTicks = ClockP_getTicks();
         }
 
-        /* Stop on software idle */
+        /* Idle detection */
         if ((ClockP_getTicks() - lastRxTicks) >= idleTicks)
         {
-            stopCondition = 1;
+            stopCondition = 1U;
         }
 
-        /* Stop if total timeout reached */
+        /* Global timeout */
         elapsedTicks = ClockP_getTicks() - startTicks;
         if (elapsedTicks >= trans->timeout)
         {
-            stopCondition = 1;
+            stopCondition = 1U;
         }
     }
 
     if (numBytesRead != NULL)
         *numBytesRead = bytesReadThisCall;
 
-    /* Set transaction status */
-    trans->count  = object->readCount;
+    trans->count = object->readCount;
+
     if ((object->readSizeRemaining == 0U) &&
         (object->readErrorCnt == 0U) &&
         (object->rxTimeoutCnt == 0U))
     {
         retVal = SystemP_SUCCESS;
         trans->status = UART_TRANSFER_STATUS_SUCCESS;
-        object->readTrans = NULL;
     }
     else
     {
         retVal = SystemP_TIMEOUT;
         trans->status = UART_TRANSFER_STATUS_TIMEOUT;
-        object->readTrans = NULL;
     }
+
+    object->readTrans = NULL;
 
     return retVal;
 }
 
+//----------------------------------------------------------------------------------------------------------------
+
 int32_t UART_readIdle(UART_Handle handle,
                       UART_Transaction *trans,
-                      uint32_t          idleTicks,
                       uint32_t         *numBytesRead)  /* output: bytes read */
 {
     int32_t status;
@@ -121,7 +159,7 @@ int32_t UART_readIdle(UART_Handle handle,
     HwiP_restore(key);
 
     /* Call the idle-polling function in polled mode */
-    return UART_readIdlePolling(config, object, attrs, trans, idleTicks, numBytesRead);
+    return UART_readIdlePolling(config, object, attrs, trans, numBytesRead);
 }
 
 uint32_t bytesRead = 0;
