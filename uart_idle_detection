@@ -1,0 +1,129 @@
+static int32_t UART_readIdlePolling(UART_Config      *config,
+                                    UART_Object      *object,
+                                    UART_Attrs const *attrs,
+                                    UART_Transaction *trans,
+                                    uint32_t          idleTicks,
+                                    uint32_t         *numBytesRead)  
+{
+    uint32_t startTicks, elapsedTicks, lastRxTicks;
+    int32_t  retVal = SystemP_SUCCESS;
+    uint32_t stopCondition = 0;
+    uint32_t bytesReadThisCall = 0;
+
+    /* Initialize counters */
+    object->readSizeRemaining = trans->count;
+    object->readCount = 0U;
+
+    /* Record initial time */
+    startTicks  = ClockP_getTicks();
+    lastRxTicks = startTicks;
+
+    /* Main polling loop */
+    while ((0 == stopCondition) && (object->readSizeRemaining != 0U))
+    {
+        uint32_t before = object->readCount;
+
+        /* Read bytes from FIFO */
+        UART_readDataPolling(config, object, attrs);
+
+        /* Update lastRxTicks and accumulate bytes read */
+        if (object->readCount > before)
+        {
+            bytesReadThisCall += object->readCount - before;
+            lastRxTicks = ClockP_getTicks();
+        }
+
+        /* Stop on software idle */
+        if ((ClockP_getTicks() - lastRxTicks) >= idleTicks)
+        {
+            stopCondition = 1;
+        }
+
+        /* Stop if total timeout reached */
+        elapsedTicks = ClockP_getTicks() - startTicks;
+        if (elapsedTicks >= trans->timeout)
+        {
+            stopCondition = 1;
+        }
+    }
+
+    if (numBytesRead != NULL)
+        *numBytesRead = bytesReadThisCall;
+
+    /* Set transaction status */
+    trans->count  = object->readCount;
+    if ((object->readSizeRemaining == 0U) &&
+        (object->readErrorCnt == 0U) &&
+        (object->rxTimeoutCnt == 0U))
+    {
+        retVal = SystemP_SUCCESS;
+        trans->status = UART_TRANSFER_STATUS_SUCCESS;
+        object->readTrans = NULL;
+    }
+    else
+    {
+        retVal = SystemP_TIMEOUT;
+        trans->status = UART_TRANSFER_STATUS_TIMEOUT;
+        object->readTrans = NULL;
+    }
+
+    return retVal;
+}
+
+int32_t UART_readIdle(UART_Handle handle,
+                      UART_Transaction *trans,
+                      uint32_t          idleTicks,
+                      uint32_t         *numBytesRead)  /* output: bytes read */
+{
+    int32_t status;
+    UART_Config      *config;
+    UART_Object      *object;
+    const UART_Attrs *attrs;
+    UART_Params      *prms;
+    uintptr_t key;
+
+    if ((NULL == handle) || (NULL == trans))
+        return SystemP_FAILURE;
+
+    config  = (UART_Config *) handle;
+    object  = config->object;
+    attrs   = config->attrs;
+    prms    = &object->prms;
+
+    if (object->isOpen != TRUE)
+        return SystemP_FAILURE;
+
+    status = UART_checkTransaction(object, trans);
+    if (status != SystemP_SUCCESS)
+        return SystemP_FAILURE;
+
+    if (prms->skipIntrReg == TRUE)
+        return SystemP_FAILURE;
+
+    /* Prevent concurrent access */
+    key = HwiP_disable();
+    if (object->readTrans != NULL)
+    {
+        trans->status = UART_TRANSFER_STATUS_ERROR_INUSE;
+        HwiP_restore(key);
+        return SystemP_FAILURE;
+    }
+
+    /* Initialize transaction */
+    object->readTrans          = trans;
+    object->readBuf            = trans->buf;
+    object->readCount          = 0U;
+    object->readSizeRemaining  = trans->count;
+    object->rxTimeoutCnt       = 0U;
+    object->readErrorCnt       = 0U;
+    object->readTrans->timeout = trans->timeout;
+
+    HwiP_restore(key);
+
+    /* Call the idle-polling function in polled mode */
+    return UART_readIdlePolling(config, object, attrs, trans, idleTicks, numBytesRead);
+}
+
+uint32_t bytesRead = 0;
+UART_readIdle(gUartHandle[CONFIG_UART_CONSOLE], &trans, 10U, &bytesRead);
+
